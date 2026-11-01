@@ -92,6 +92,8 @@ class TeachingDevice(ABC):
             self._alert_raised_handlers.remove(handler)
 
     def change_status(self, new_status: DeviceStatus):
+        if new_status == self._status:
+            return
         old = self._status
         self._status = new_status
         args = DeviceStatusChangedEventArgs(
@@ -103,7 +105,7 @@ class TeachingDevice(ABC):
         for handler in self._status_changed_handlers:
             handler(self, e)
 
-    def rasie_alert(self, message: str, severity: AlertSeverity):
+    def _raise_alert(self, message: str, severity: AlertSeverity):
         args = DeviceAlertEventArgs(
             self.id, message, severity, datetime.now()
         )
@@ -169,12 +171,8 @@ class WirelessMicrophone(TeachingDevice):
 
 #  SUBSCRIBER
 class ConsoleNotificationService:
-    def handle_status_changed(self, sender, e: DeviceStatusChangedEventArgs):
-        print(f"[NOTIFY] {e.device_id}: {e.old_status.value} → {e.new_status.value} "
-              f"lúc {e.changed_at.strftime('%H:%M:%S')}")
-
     def handle_alert(self, sender, e: DeviceAlertEventArgs):
-        print(f"[ALERT-{e.severity.value}] {e.device_id}: {e.message}")
+        print(f"[{e.severity.value}] {e.device_id}: {e.message}")
 
 
 class DeviceAuditLogger:
@@ -184,17 +182,16 @@ class DeviceAuditLogger:
         entry = (f"{e.changed_at.isoformat()} | {e.device_id} | "
                  f"{e.old_status.value} → {e.new_status.value}")
         self.logs.append(entry)
-        print(f"[AUDIT] Ghi log: {entry}")
 
 
 class MaintenanceService:
     def __init__(self):
         self.requests: List[str] = []
 
-    def handle_alert(self, sender, e: DeviceAlertEventArgs):
+    def handle_critical_alert(self, sender, e: DeviceAlertEventArgs):
         if e.severity != AlertSeverity.CRITICAL:
-            pass
-        self.requests.append(
+            return
+        self._requests.append(
             f"Maintenance request for {e.device_id}: {e.message}"
         )
         print(f"[MAINT] Tạo yêu cầu bảo trì: {e.device_id}")
@@ -228,19 +225,22 @@ class DeviceMonitoringCoordinator:
         self._subscribed = False
 
     def subscribe(self):
+        if self._subscribed:
+            return
         for d in self._devices:
-            d.add_status_changed_handler(self._notification.handle_status_changed)
-            d.add_status_changed_handler(self._audit.handle_status_changed)
             d.add_alert_raised_handler(self._notification.handle_alert)
-            d.add_alert_raised_handler(self._maintenance.handle_alert)
+            d.add_alert_raised_handler(self._maintenance.handle_critical_alert)
+            d.add_status_changed_handler(self._audit.handle_status_changed)
         self._subscribed = True
         print("Đã đăng ký tất cả handler.")
 
     def unsubscribe(self):
         for d in self._devices:
-            d.remove_status_changed_handler(self._notification.handle_status_changed)
+            d.remove_alert_raised_handler(self._notification.handle_alert)
+            d.remove_alert_raised_handler(self._maintenance.handle_critical_alert)
+            d.remove_status_changed_handler(self._audit.handle_status_changed)
         self._subscribed = False
-        print("Đã hủy đăng ký (nhưng còn sót handler – lỗi).")
+        print("Đã hủy đăng ký tất cả handler.")
 
     def dispose(self):
         self.unsubscribe()
